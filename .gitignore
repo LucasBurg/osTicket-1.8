@@ -21,3 +21,5 @@ include/mpdf/tmp
 #archives de aptana studio
 .project
 .settings
+_setup
+setup
