@@ -49,6 +49,8 @@ if(!empty($nav)){
 	}
 }
 
+//pages to type other
+$otherPages = Page::getActivePages()->filter(array('type'=>'other'));
 
 //header("Content-Type: text/html; charset=UTF-8\r\n");
 ?>
@@ -183,17 +185,49 @@ if(!empty($nav)){
 				             			<?php echo $nav['desc']; ?>
 				             		</a>
 			             		</li> 
-			             	<?php endforeach; ?>	
+			             	<?php endforeach; ?>
+			             	
+			             	<!-- btn othes -->
+			             	<?php if ($otherPages->all()) : ?>
+				             	<li>
+					        		<a href="#" class="dropdown-toggle" data-toggle="dropdown" aria-expanded="false">
+										<?php echo __('Other'); ?>
+									</a>
+									  
+									<ul class="dropdown-menu" role="menu">
+									    <?php foreach ($otherPages as $page) : ?>
+											<li>
+												<a href="<?php echo ROOT_PATH; ?>pages/<?php echo $page -> getNameAsSlug(); ?>">
+													<?php echo $page -> getLocalName(); ?>
+												</a>
+											</li>
+										<?php endforeach; ?> 
+									</ul>
+						  
+						
+				             	</li>	
+			             	<?php endif; ?>
+			             	<!-- // -->
   						</ul>
+  						
+  						
+  						
+  						
+  						
+  						
   					</div>
   					<!-- // -->
+  					
+  					
+  					
+  					
 		        </div>
 			</nav>
 		<?php endif; ?>
     
         
         
-        <div id="container-fluid">
+        <div class="container-fluid">
 
          <?php if($errors['err']) : ?>
             <div class="alert alert-danger" role="alert">
