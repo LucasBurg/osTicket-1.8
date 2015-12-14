@@ -59,10 +59,43 @@ if ($_POST) {
                     _N('selected end user', 'selected end users', $count));
         }
         break;
+
+    case 'mass_process':
+        if (!$_POST['ids'] || !is_array($_POST['ids']) || !count($_POST['ids'])) {
+            $errors['err'] = sprintf(__('You must select at least %s.'),
+                __('one organization'));
+        }
+        else {
+            $orgs = Organization::objects()->filter(
+                array('id__in' => $_POST['ids'])
+            );
+            $count = 0;
+            switch (strtolower($_POST['do'])) {
+            case 'delete':
+                foreach ($orgs as $O)
+                    if ($O->delete())
+                        $count++;
+                break;
+
+            default:
+                $errors['err']=__('Unknown action - get technical help.');
+            }
+            if (!$errors['err'] && !$count) {
+                $errors['err'] = __('Unable to manage any of the selected organizations');
+            }
+            elseif ($_POST['count'] && $count != $_POST['count']) {
+                $warn = __('Not all selected items were updated');
+            }
+            elseif ($count) {
+                $msg = __('Successfully managed selected organizations');
+            }
+        }
+        break;
+
     default:
         $errors['err'] = __('Unknown action');
     }
-} elseif ($_REQUEST['a'] == 'export') {
+} elseif (!$org && $_REQUEST['a'] == 'export') {
     require_once(INCLUDE_DIR.'class.export.php');
     $ts = strftime('%Y%m%d');
     if (!($token=$_REQUEST['qh']))
@@ -73,7 +106,26 @@ if ($_POST) {
         $errors['err'] = __('Internal error: Unable to export results');
 }
 
-$page = $org? 'org-view.inc.php' : 'orgs.inc.php';
+$page = 'orgs.inc.php';
+if ($org) {
+    $page = 'org-view.inc.php';
+    switch (strtolower($_REQUEST['t'])) {
+    case 'tickets':
+        if (isset($_SERVER['HTTP_X_PJAX'])) {
+            $page='templates/tickets.tmpl.php';
+            $pjax_container = @$_SERVER['HTTP_X_PJAX_CONTAINER'];
+            require(STAFFINC_DIR.$page);
+            return;
+        } elseif ($_REQUEST['a'] == 'export' && ($query=$_SESSION[':O:tickets'])) {
+            $filename = sprintf('%s-tickets-%s.csv',
+                    $org->getName(), strftime('%Y%m%d'));
+            if (!Export::saveTickets($query, $filename, 'csv'))
+                $errors['err'] = __('Internal error: Unable to dump query results');
+        }
+        break;
+    }
+}
+
 $nav->setTabActive('users');
 require(STAFFINC_DIR.'header.inc.php');
 require(STAFFINC_DIR.$page);

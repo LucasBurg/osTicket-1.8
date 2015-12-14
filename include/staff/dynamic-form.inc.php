@@ -6,7 +6,7 @@ if($form && $_REQUEST['a']!='add') {
     $action = 'update';
     $url = "?id=".urlencode($_REQUEST['id']);
     $submit_text=__('Save Changes');
-    $info = $form->ht;
+    $info = $form->getInfo();
     $trans = array(
         'title' => $form->getTranslateTag('title'),
         'instructions' => $form->getTranslateTag('instructions'),
@@ -15,7 +15,7 @@ if($form && $_REQUEST['a']!='add') {
     $translations = CustomDataTranslation::allTranslations($trans, 'phrase');
     $_keys = array_flip($trans);
     foreach ($translations as $t) {
-        if (!Internationalization::isLanguageInstalled($t->lang))
+        if (!Internationalization::isLanguageEnabled($t->lang))
             continue;
         // Create keys of [trans][de_DE][title] for instance
         $info['trans'][$t->lang][$_keys[$t->object_hash]]
@@ -36,12 +36,16 @@ $info=Format::htmlchars(($errors && $_POST)?$_POST:$info);
     <input type="hidden" name="do" value="<?php echo $action; ?>">
     <input type="hidden" name="a" value="<?php echo $action; ?>">
     <input type="hidden" name="id" value="<?php echo $info['id']; ?>">
-    <h2><?php echo $form ? Format::htmlchars($form->getTitle()) : __('Custom Form'); ?></h2>
+
+    <h2><?php echo $title; ?>
+    <?php if (isset($info['title'])) { ?><small>
+    — <?php echo $info['title']; ?></small>
+        <?php } ?>
+    </h2>
     <table class="form_table" width="940" border="0" cellspacing="0" cellpadding="2">
     <thead>
         <tr>
             <th colspan="2">
-                <h4><?php echo $title; ?></h4>
                 <em><?php echo __(
                 'Forms are used to allow for collection of custom data'
                 ); ?></em>
@@ -49,13 +53,12 @@ $info=Format::htmlchars(($errors && $_POST)?$_POST:$info);
         </tr>
     </thead>
     <tbody style="vertical-align:top">
-        <tr>
-            <td colspan="2">
-    <table class="full-width"><tbody><tr><td style="vertical-align:top">
+      <tr>
+        <td colspan="2">
 <?php
 $langs = Internationalization::getConfiguredSystemLanguages();
 if ($form && count($langs) > 1) { ?>
-    <ul class="vertical tabs" id="translations">
+    <ul class="alt tabs clean" id="translations">
         <li class="empty"><i class="icon-globe" title="This content is translatable"></i></li>
 <?php foreach ($langs as $tag=>$nfo) { ?>
     <li class="<?php if ($tag == $cfg->getPrimaryLanguage()) echo "active";
@@ -67,13 +70,12 @@ if ($form && count($langs) > 1) { ?>
     </ul>
 <?php
 } ?>
-    </td>
-    <td id="translations_container">
+    <div id="translations_container">
         <div id="translation-<?php echo $cfg->getPrimaryLanguage(); ?>" class="tab_content"
             lang="<?php echo $cfg->getPrimaryLanguage(); ?>">
             <div class="required"><?php echo __('Title'); ?>:</div>
             <div>
-            <input type="text" name="title" size="60"
+            <input type="text" name="title" size="60" autofocus
                 value="<?php echo $info['title']; ?>"/>
                 <i class="help-tip icon-question-sign" href="#form_title"></i>
                 <div class="error"><?php
@@ -82,7 +84,7 @@ if ($form && count($langs) > 1) { ?>
             <div style="margin-top: 8px"><?php echo __('Instructions'); ?>:
                 <i class="help-tip icon-question-sign" href="#form_instructions"></i>
                 </div>
-            <textarea name="instructions" rows="3" cols="40" class="richtext"><?php
+            <textarea name="instructions" rows="3" cols="40" class="richtext small"><?php
                 echo $info['instructions']; ?></textarea>
         </div>
 
@@ -102,13 +104,13 @@ if ($form && count($langs) > 1) { ?>
             <i class="help-tip icon-question-sign" href="#form_instructions"></i>
             </div>
         <textarea name="trans[<?php echo $tag; ?>][instructions]" cols="21" rows="12"
-            style="width:100%" class="richtext"><?php
+            style="width:100%" class="richtext small"><?php
             echo $info['trans'][$tag]['instructions']; ?></textarea>
         </div>
 <?php }
 } ?>
-    </td></tr></tbody></table>
-        </td></tr>
+        </td>
+      </tr>
     </tbody>
     </table>
     <table class="form_table" width="940" border="0" cellspacing="0" cellpadding="2">
@@ -157,7 +159,7 @@ if ($form && count($langs) > 1) { ?>
             </th>
         </tr>
         <tr>
-            <th nowrap
+            <th nowrap width="4%"
                 ><i class="help-tip icon-question-sign" href="#field_sort"></i></th>
             <th nowrap><?php echo __('Label'); ?>
                 <i class="help-tip icon-question-sign" href="#field_label"></i></th>
@@ -179,12 +181,13 @@ if ($form && count($langs) > 1) { ?>
         $fi = $f->getImpl();
         $ferrors = $f->errors(); ?>
         <tr>
-            <td><i class="icon-sort"></i></td>
+            <td align="center"><i class="icon-sort"></i></td>
             <td><input type="text" size="32" name="label-<?php echo $id; ?>"
                 data-translate-tag="<?php echo $f->getTranslateTag('label'); ?>"
                 value="<?php echo Format::htmlchars($f->get('label')); ?>"/>
                 <font class="error"><?php
                     if ($ferrors['label']) echo '<br/>'; echo $ferrors['label']; ?>
+                </font>
             </td>
             <td nowrap><select style="max-width:150px" name="type-<?php echo $id; ?>" <?php
                 if (!$fi->isChangeable()) echo 'disabled="disabled"'; ?>>
@@ -220,18 +223,20 @@ if ($form && count($langs) > 1) { ?>
                     if ($ferrors['name']) echo '<br/>'; echo $ferrors['name'];
                 ?></font>
                 </td>
-            <td><input class="delete-box" type="checkbox" name="delete-<?php echo $id; ?>"
+            <td align="center">
+                <input class="delete-box" type="checkbox" name="delete-<?php echo $id; ?>"
                     data-field-label="<?php echo $f->get('label'); ?>"
                     data-field-id="<?php echo $id; ?>"
                     <?php echo $deletable; ?>/>
                 <input type="hidden" name="sort-<?php echo $id; ?>"
                     value="<?php echo $f->get('sort'); ?>"/>
-                </td>
+            </td>
         </tr>
+    <tr>
     <?php
     }
     for ($i=0; $i<$newcount; $i++) { ?>
-            <td><em>+</em>
+            <td align="center"><em>+</em>
                 <input type="hidden" name="sort-new-<?php echo $i; ?>"
                     value="<?php echo $info["sort-new-$i"]; ?>"/></td>
             <td><input type="text" size="32" name="label-new-<?php echo $i; ?>"
@@ -248,9 +253,10 @@ if ($form && count($langs) > 1) { ?>
                     <?php } ?>
                 </optgroup>
                 <?php } ?>
-            </select></td>
-            <td>
-                <select name="visibility-new-<?php echo $i; ?>">
+            </select>
+        </td>
+        <td>
+            <select name="visibility-new-<?php echo $i; ?>">
 <?php
     $rmode = $info['visibility-new-'.$i];
     foreach (DynamicFormField::allRequirementModes() as $m=>$I) { ?>
@@ -258,12 +264,15 @@ if ($form && count($langs) > 1) { ?>
          echo 'selected="selected"'; ?>><?php echo $I['desc']; ?></option>
 <?php } ?>
                 <select>
-            <td><input type="text" size="20" name="name-new-<?php echo $i; ?>"
-                value="<?php echo $info["name-new-$i"]; ?>"/>
-                <font class="error"><?php
-                    if ($errors["new-$i"]['name']) echo '<br/>'; echo $errors["new-$i"]['name'];
-                ?></font>
-            <td></td>
+                    <td><input type="text" size="20" name="name-new-<?php echo $i; ?>"
+                        value="<?php echo $info["name-new-$i"]; ?>"/>
+                        <font class="error"><?php
+                            if ($errors["new-$i"]['name']) echo '<br/>'; echo $errors["new-$i"]['name'];
+                            ?>
+                        </font>
+                    </td>
+                </select>
+            </select>
         </tr>
     <?php } ?>
     </tbody>
@@ -289,7 +298,7 @@ if ($form && count($langs) > 1) { ?>
 </p>
 
 <div style="display:none;" class="draggable dialog" id="delete-confirm">
-    <h3><i class="icon-trash"></i> <?php echo __('Remove Existing Data?'); ?></h3>
+    <h3 class="drag-handle"><i class="icon-trash"></i> <?php echo __('Remove Existing Data?'); ?></h3>
     <a class="close" href=""><i class="icon-remove-circle"></i></a>
     <hr/>
     <p>

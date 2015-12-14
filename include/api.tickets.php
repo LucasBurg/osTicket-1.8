@@ -20,9 +20,10 @@ class TicketApiController extends ApiController {
         # the names to the supported request structure
         if (isset($data['topicId'])
                 && ($topic = Topic::lookup($data['topicId']))
-                && ($form = $topic->getForm())) {
-            foreach ($form->getDynamicFields() as $field)
-                $supported[] = $field->get('name');
+                && ($forms = $topic->getForms())) {
+            foreach ($forms as $form)
+                foreach ($form->getDynamicFields() as $field)
+                    $supported[] = $field->get('name');
         }
 
         # Ticket form fields
@@ -40,7 +41,7 @@ class TicketApiController extends ApiController {
             $supported = array_merge($supported, array('header', 'mid',
                 'emailId', 'to-email-id', 'ticketId', 'reply-to', 'reply-to-name',
                 'in-reply-to', 'references', 'thread-type',
-                'flags' => array('bounce', 'auto-reply', 'spam', 'viral'),
+                'mailflags' => array('bounce', 'auto-reply', 'spam', 'viral'),
                 'recipients' => array('*' => array('name', 'email', 'source'))
                 ));
 

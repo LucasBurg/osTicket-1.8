@@ -14,7 +14,7 @@ $actions= array(
         );
 
 $states = array('open');
-if ($thisstaff->hasPerm(TicketModel::PERM_CLOSE)
+if ($thisstaff->getRole($ticket ? $ticket->getDeptId() : null)->hasPerm(TicketModel::PERM_CLOSE)
         && (!$ticket || !$ticket->getMissingRequiredFields()))
     $states = array_merge($states, array('closed'));
 
@@ -34,12 +34,11 @@ if (!$nextStatuses)
 
 <span
     class="action-button"
-    data-dropdown="#action-dropdown-statuses">
+    data-dropdown="#action-dropdown-statuses" data-placement="bottom" data-toggle="tooltip" title="<?php echo __('Change Status'); ?>">
     <i class="icon-caret-down pull-right"></i>
     <a class="tickets-action"
         href="#statuses"><i
-        class="icon-flag"></i> <?php
-        echo __('Change Status'); ?></a>
+        class="icon-flag"></i></a>
 </span>
 <div id="action-dropdown-statuses"
     class="action-dropdown anchor-right">
@@ -55,7 +54,7 @@ if (!$nextStatuses)
                             $status->getId()); ?>"
                 <?php
                 if (isset($actions[$status->getState()]['href']))
-                    echo sprintf('data-href="%s"',
+                    echo sprintf('data-redirect="%s"',
                             $actions[$status->getState()]['href']);
 
                 ?>

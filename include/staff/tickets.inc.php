@@ -2,7 +2,10 @@
 $search = SavedSearch::create();
 $tickets = TicketModel::objects();
 $clear_button = false;
-$date_header = $date_col = false;
+$view_all_tickets = $date_header = $date_col = false;
+
+// Make sure the cdata materialized view is available
+TicketForm::ensureDynamicDataView();
 
 // Figure out REFRESH url — which might not be accurate after posting a
 // response
@@ -12,65 +15,135 @@ parse_str($_SERVER['QUERY_STRING'], $args);
 
 // Remove commands from query
 unset($args['id']);
-unset($args['a']);
+if ($args['a'] !== 'search') unset($args['a']);
 
 $refresh_url = $path . '?' . http_build_query($args);
 
-$queue_name = strtolower($_GET['status'] ?: $_GET['a']); //Status is overloaded
+$sort_options = array(
+    'priority,updated' =>   __('Priority + Most Recently Updated'),
+    'updated' =>            __('Most Recently Updated'),
+    'priority,created' =>   __('Priority + Most Recently Created'),
+    'due' =>                __('Due Date'),
+    'priority,due' =>       __('Priority + Due Date'),
+    'number' =>             __('Ticket Number'),
+    'answered' =>           __('Most Recently Answered'),
+    'closed' =>             __('Most Recently Closed'),
+    'hot' =>                __('Longest Thread'),
+    'relevance' =>          __('Relevance'),
+);
+$use_subquery = true;
+
+// Figure out the queue we're viewing
+$queue_key = sprintf('::Q:%s', ObjectModel::OBJECT_TYPE_TICKET);
+$queue_name = $_SESSION[$queue_key] ?: '';
+
 switch ($queue_name) {
 case 'closed':
     $status='closed';
     $results_type=__('Closed Tickets');
     $showassigned=true; //closed by.
-    $tickets->values('staff__firstname', 'staff__lastname', 'team__name', 'team_id');
+    $queue_sort_options = array('closed', 'priority,due', 'due',
+        'priority,updated', 'priority,created', 'answered', 'number', 'hot');
     break;
 case 'overdue':
     $status='open';
     $results_type=__('Overdue Tickets');
     $tickets->filter(array('isoverdue'=>1));
+    $queue_sort_options = array('priority,due', 'due', 'priority,updated',
+        'updated', 'answered', 'priority,created', 'number', 'hot');
     break;
 case 'assigned':
     $status='open';
     $staffId=$thisstaff->getId();
     $results_type=__('My Tickets');
-    $tickets->filter(array('staff_id'=>$thisstaff->getId()));
+    $tickets->filter(Q::any(array(
+        'staff_id'=>$thisstaff->getId(),
+        Q::all(array('staff_id' => 0, 'team_id__gt' => 0)),
+    )));
+    $queue_sort_options = array('updated', 'priority,updated',
+        'priority,created', 'priority,due', 'due', 'answered', 'number',
+        'hot');
     break;
 case 'answered':
     $status='open';
     $showanswered=true;
     $results_type=__('Answered Tickets');
     $tickets->filter(array('isanswered'=>1));
+    $queue_sort_options = array('answered', 'priority,updated', 'updated',
+        'priority,created', 'priority,due', 'due', 'number', 'hot');
     break;
 default:
 case 'search':
+    $queue_sort_options = array('priority,updated', 'priority,created',
+        'priority,due', 'due', 'updated', 'answered',
+        'closed', 'number', 'hot');
     // Consider basic search
     if ($_REQUEST['query']) {
         $results_type=__('Search Results');
         // Use an index if possible
-        if (Validator::is_email($_REQUEST['query'])) {
-            $tickets = $tickets->filter(array(
-                'user__emails__address' => $_REQUEST['query'],
-            ));
+        if ($_REQUEST['search-type'] == 'typeahead') {
+            if (Validator::is_email($_REQUEST['query'])) {
+                $tickets = $tickets->filter(array(
+                    'user__emails__address' => $_REQUEST['query'],
+                ));
+            }
+            elseif ($_REQUEST['query']) {
+                $tickets = $tickets->filter(array(
+                    'number' => $_REQUEST['query'],
+                ));
+            }
         }
-        else {
-            $tickets = $tickets->filter(Q::any(array(
-                'number__startswith' => $_REQUEST['query'],
-                'user__emails__address__contains' => $_REQUEST['query'],
-            )));
+        elseif (isset($_REQUEST['query'])
+            && ($q = trim($_REQUEST['query']))
+            && strlen($q) > 2
+        ) {
+            // [Search] click, consider keywords
+            $__tickets = $ost->searcher->find($q, $tickets);
+            if (!count($__tickets) && preg_match('`\w$`u', $q)) {
+                // Do wildcard search if no hits
+                $__tickets = $ost->searcher->find($q.'*', $tickets);
+            }
+            $tickets = $__tickets;
+            $has_relevance = true;
         }
+        if (count($tickets) == 1) {
+            // Redirect to ticket page
+            Http::redirect('tickets.php?id='.$tickets[0]->getId());
+        }
+        // Clear sticky search queue
+        unset($_SESSION[$queue_key]);
         break;
     }
-    elseif (isset($_GET['uid'])) {
-        // Apply user filter
+    // Apply user filter
+    elseif (isset($_GET['uid']) && ($user = User::lookup($_GET['uid']))) {
         $tickets->filter(array('user__id'=>$_GET['uid']));
+        $results_type = sprintf('%s — %s', __('Search Results'),
+            $user->getName());
+        if (isset($_GET['status']))
+            $status = $_GET['status'];
+        // Don't apply normal open ticket
+        break;
     }
-    elseif (isset($_SESSION['advsearch'])) {
-        // XXX: De-duplicate and simplify this code
+    elseif (isset($_GET['orgid']) && ($org = Organization::lookup($_GET['orgid']))) {
+        $tickets->filter(array('user__org_id'=>$_GET['orgid']));
+        $results_type = sprintf('%s — %s', __('Search Results'),
+            $org->getName());
+        if (isset($_GET['status']))
+            $status = $_GET['status'];
+        // Don't apply normal open ticket
+        break;
+    } elseif (isset($_SESSION['advsearch'])) {
         $form = $search->getFormFromSession('advsearch');
-        $form->loadState($_SESSION['advsearch']);
         $tickets = $search->mangleQuerySet($tickets, $form);
+        $view_all_tickets = $thisstaff->hasPerm(SearchBackend::PERM_EVERYTHING);
         $results_type=__('Advanced Search')
-            . '<a class="action-button" href="?clear_filter"><i class="icon-ban-circle"></i> <em>' . __('clear') . '</em></a>';
+            . '<a class="action-button" style="font-size: 15px;" href="?clear_filter"><i style="top:0" class="icon-ban-circle"></i> <em>' . __('clear') . '</em></a>';
+        foreach ($form->getFields() as $sf) {
+            if ($sf->get('name') == 'keywords' && $sf->getClean()) {
+                $has_relevance = true;
+                break;
+            }
+        }
         break;
     }
     // Fall-through and show open tickets
@@ -79,9 +152,19 @@ case 'open':
     $results_type=__('Open Tickets');
     if (!$cfg->showAnsweredTickets())
         $tickets->filter(array('isanswered'=>0));
-    if (!$cfg || !($cfg->showAssignedTickets() || $thisstaff->showAssignedTickets()))
-        $tickets->filter(Q::any(array('staff_id'=>0, 'team_id'=>0)));
+    $queue_sort_options = array('priority,updated', 'updated',
+        'priority,due', 'due', 'priority,created', 'answered', 'number',
+        'hot');
     break;
+}
+
+// Open queues _except_ assigned should respect showAssignedTickets()
+// settings
+if ($status != 'closed' && $queue_name != 'assigned') {
+    $hideassigned = ($cfg && !$cfg->showAssignedTickets()) && !$thisstaff->showAssignedTickets();
+    $showassigned = !$hideassigned;
+    if ($queue_name == 'open' && $hideassigned)
+        $tickets->filter(array('staff_id'=>0, 'team_id'=>0));
 }
 
 // Apply primary ticket status
@@ -90,133 +173,213 @@ if ($status)
 
 // Impose visibility constraints
 // ------------------------------------------------------------
-// -- Open and assigned to me
-$visibility = array(
-    new Q(array('status__state'=>'open', 'staff_id' => $thisstaff->getId()))
-);
-// -- Routed to a department of mine
-if (!$thisstaff->showAssignedOnly() && ($depts=$thisstaff->getDepts()))
-    $visibility[] = new Q(array('dept_id__in' => $depts));
-// -- Open and assigned to a team of mine
-if (($teams = $thisstaff->getTeams()) && count(array_filter($teams)))
-    $visibility[] = new Q(array(
-        'team_id__in' => array_filter($teams), 'status__state'=>'open'
+if (!$view_all_tickets) {
+    // -- Open and assigned to me
+    $assigned = Q::any(array(
+        'staff_id' => $thisstaff->getId(),
     ));
-$tickets->filter(Q::any($visibility));
+    // -- Open and assigned to a team of mine
+    if ($teams = array_filter($thisstaff->getTeams()))
+        $assigned->add(array('team_id__in' => $teams));
 
-// Add in annotations
-$tickets->annotate(array(
-    'collab_count' => SqlAggregate::COUNT('thread__collaborators'),
-    'attachment_count' => SqlAggregate::COUNT('thread__entries__attachments'),
-    'thread_count' => SqlAggregate::COUNT('thread__entries'),
-));
+    $visibility = Q::any(new Q(array('status__state'=>'open', $assigned)));
 
-// Select pertinent columns
-// ------------------------------------------------------------
-$tickets->values('lock__staff_id', 'staff_id', 'isoverdue', 'team_id', 'ticket_id', 'number', 'cdata__subject', 'user__default_email__address', 'source', 'cdata__:priority__priority_color', 'cdata__:priority__priority_desc', 'status_id', 'status__name', 'status__state', 'dept_id', 'dept__name', 'user__name', 'lastupdate');
+    // -- Routed to a department of mine
+    if (!$thisstaff->showAssignedOnly() && ($depts=$thisstaff->getDepts()))
+        $visibility->add(array('dept_id__in' => $depts));
 
-// Apply requested quick filter
+    $tickets->filter(Q::any($visibility));
+}
+
+// TODO :: Apply requested quick filter
+
+// Apply requested pagination
+$page=($_GET['p'] && is_numeric($_GET['p']))?$_GET['p']:1;
+$count = $tickets->count();
+$pageNav = new Pagenate($count, $page, PAGE_LIMIT);
+$pageNav->setURL('tickets.php', $args);
+$tickets = $pageNav->paginate($tickets);
 
 // Apply requested sorting
-$queue_sort_key = sprintf(':Q:%s:sort', $queue_name);
+$queue_sort_key = sprintf(':Q%s:%s:sort', ObjectModel::OBJECT_TYPE_TICKET, $queue_name);
 
-if (isset($_GET['sort']))
-    $_SESSION[$queue_sort_key] = $_GET['sort'];
-switch ($_SESSION[$queue_sort_key]) {
+// If relevance is available, use it as the default
+if ($has_relevance) {
+    array_unshift($queue_sort_options, 'relevance');
+}
+elseif ($_SESSION[$queue_sort_key][0] == 'relevance') {
+    unset($_SESSION[$queue_sort_key]);
+}
+
+if (isset($_GET['sort'])) {
+    $_SESSION[$queue_sort_key] = array($_GET['sort'], $_GET['dir']);
+}
+elseif (!isset($_SESSION[$queue_sort_key])) {
+    $_SESSION[$queue_sort_key] = array($queue_sort_options[0], 0);
+}
+
+list($sort_cols, $sort_dir) = $_SESSION[$queue_sort_key];
+$orm_dir = $sort_dir ? QuerySet::ASC : QuerySet::DESC;
+$orm_dir_r = $sort_dir ? QuerySet::DESC : QuerySet::ASC;
+
+switch ($sort_cols) {
 case 'number':
     $tickets->extra(array(
-        'order_by'=>array(SqlExpression::times(new SqlField('number'), 1))
+        'order_by'=>array(
+            array(SqlExpression::times(new SqlField('number'), 1), $orm_dir)
+        )
     ));
     break;
+
+case 'priority,created':
+    $tickets->order_by(($sort_dir ? '-' : '') . 'cdata__priority__priority_urgency');
+    // Fall through to columns for `created`
 case 'created':
-    $tickets->order_by('-created');
+    $date_header = __('Date Created');
+    $date_col = 'created';
+    $tickets->values('created');
+    $tickets->order_by($sort_dir ? 'created' : '-created');
     break;
 
 case 'priority,due':
-    $tickets->order_by('cdata__:priority__priority_urgency');
+    $tickets->order_by('cdata__priority__priority_urgency', $orm_dir_r);
     // Fall through to add in due date filter
 case 'due':
     $date_header = __('Due Date');
     $date_col = 'est_duedate';
     $tickets->values('est_duedate');
-    $tickets->filter(array('est_duedate__isnull'=>false));
-    $tickets->order_by('est_duedate');
+    $tickets->order_by(SqlFunction::COALESCE(new SqlField('est_duedate'), 'zzz'), $orm_dir_r);
+    break;
+
+case 'closed':
+    $date_header = __('Date Closed');
+    $date_col = 'closed';
+    $tickets->values('closed');
+    $tickets->order_by('closed', $orm_dir);
+    break;
+
+case 'answered':
+    $date_header = __('Last Response');
+    $date_col = 'thread__lastresponse';
+    $date_fallback = '<em class="faded">'.__('unanswered').'</em>';
+    $tickets->order_by('thread__lastresponse', $orm_dir);
+    $tickets->values('thread__lastresponse');
+    break;
+
+case 'hot':
+    $tickets->order_by('thread_count', $orm_dir);
+    $tickets->annotate(array(
+        'thread_count' => SqlAggregate::COUNT('thread__entries'),
+    ));
+    break;
+
+case 'relevance':
+    $tickets->order_by(new SqlCode('__relevance__'), $orm_dir);
     break;
 
 default:
+case 'priority,updated':
+    $tickets->order_by('cdata__priority__priority_urgency', $orm_dir_r);
+    // Fall through for columns defined for `updated`
 case 'updated':
-    $tickets->order_by('cdata__:priority__priority_urgency', '-lastupdate');
+    $date_header = __('Last Updated');
+    $date_col = 'lastupdate';
+    $tickets->order_by('lastupdate', $orm_dir);
     break;
 }
 
-// Apply requested pagination
-$page=($_GET['p'] && is_numeric($_GET['p']))?$_GET['p']:1;
-$pageNav=new Pagenate($tickets->count(), $page, PAGE_LIMIT);
-$pageNav->setURL('tickets.php', $args);
-$tickets = $pageNav->paginate($tickets);
+// Rewrite $tickets to use a nested query, which will include the LIMIT part
+// in order to speed the result
+$orig_tickets = clone $tickets;
+$tickets2 = TicketModel::objects();
+$tickets2->values = $tickets->values;
+$tickets2->filter(array('ticket_id__in' => $tickets->values_flat('ticket_id')));
 
-TicketForm::ensureDynamicDataView();
+// Transfer the order_by from the original tickets
+$tickets2->order_by($orig_tickets->getSortFields());
+$tickets = $tickets2;
 
 // Save the query to the session for exporting
 $_SESSION[':Q:tickets'] = $tickets;
+
+TicketForm::ensureDynamicDataView();
+
+// Select pertinent columns
+// ------------------------------------------------------------
+$tickets->values('lock__staff_id', 'staff_id', 'isoverdue', 'team_id', 'ticket_id', 'number', 'cdata__subject', 'user__default_email__address', 'source', 'cdata__priority__priority_color', 'cdata__priority__priority_desc', 'status_id', 'status__name', 'status__state', 'dept_id', 'dept__name', 'user__name', 'lastupdate', 'isanswered', 'staff__firstname', 'staff__lastname', 'team__name');
+
+// Add in annotations
+$tickets->annotate(array(
+    'collab_count' => TicketThread::objects()
+        ->filter(array('ticket__ticket_id' => new SqlField('ticket_id', 1)))
+        ->aggregate(array('count' => SqlAggregate::COUNT('collaborators__id'))),
+    'attachment_count' => TicketThread::objects()
+        ->filter(array('ticket__ticket_id' => new SqlField('ticket_id', 1)))
+        ->filter(array('entries__attachments__inline' => 0))
+        ->aggregate(array('count' => SqlAggregate::COUNT('entries__attachments__id'))),
+    'thread_count' => TicketThread::objects()
+        ->filter(array('ticket__ticket_id' => new SqlField('ticket_id', 1)))
+        ->exclude(array('entries__flags__hasbit' => ThreadEntry::FLAG_HIDDEN))
+        ->aggregate(array('count' => SqlAggregate::COUNT('entries__id'))),
+));
+
+
+// Make sure we're only getting active locks
+$tickets->constrain(array('lock' => array(
+                'lock__expire__gt' => SqlFunction::NOW())));
 
 ?>
 
 <!-- SEARCH FORM START -->
 <div id='basic_search'>
-    <form action="tickets.php" method="get">
+  <div class="pull-right" style="height:25px">
+    <span class="valign-helper"></span>
+    <?php
+    require STAFFINC_DIR.'templates/queue-sort.tmpl.php';
+    ?>
+  </div>
+    <form action="tickets.php" method="get" onsubmit="javascript:
+  $.pjax({
+    url:$(this).attr('action') + '?' + $(this).serialize(),
+    container:'#pjax-container',
+    timeout: 2000
+  });
+return false;">
     <input type="hidden" name="a" value="search">
-    <table>
-        <tr>
-            <td><input type="text" id="basic-ticket-search" name="query"
-            size=30 value="<?php echo Format::htmlchars($_REQUEST['query'],
-            true); ?>"
-                autocomplete="off" autocorrect="off" autocapitalize="off"></td>
-            <td><input type="submit" class="button" value="<?php echo __('Search'); ?>"></td>
-            <td>&nbsp;&nbsp;<a href="#" onclick="javascript:
-                $.dialog('ajax.php/tickets/search', 201);"
-                >[<?php echo __('advanced'); ?>]</a>&nbsp;<i class="help-tip icon-question-sign" href="#advanced"></i></td>
-        </tr>
-    </table>
+    <input type="hidden" name="search-type" value=""/>
+    <div class="attached input">
+      <input type="text" class="basic-search" data-url="ajax.php/tickets/lookup" name="query"
+        autofocus size="30" value="<?php echo Format::htmlchars($_REQUEST['query'], true); ?>"
+        autocomplete="off" autocorrect="off" autocapitalize="off">
+      <button type="submit" class="attached button"><i class="icon-search"></i>
+      </button>
+    </div>
+    <a href="#" onclick="javascript:
+        $.dialog('ajax.php/tickets/search', 201);"
+        >[<?php echo __('advanced'); ?>]</a>
+        <i class="help-tip icon-question-sign" href="#advanced"></i>
     </form>
 </div>
 <!-- SEARCH FORM END -->
 <div class="clear"></div>
-<div style="margin-bottom:20px; padding-top:10px;">
-<div>
-        <div class="pull-left flush-left">
-            <h2><a href="<?php echo $refresh_url; ?>"
-                title="<?php echo __('Refresh'); ?>"><i class="icon-refresh"></i> <?php echo
-                $results_type.$showing; ?></a></h2>
-        </div>
-        <div class="pull-right flush-right">
-            <span style="display:inline-block">
-                <span style="vertical-align: baseline">Sort:</span>
-            <select name="sort" onchange="javascript:addSearchParam('sort', $(this).val());">
-<?php foreach (array(
-    'updated' =>    __('Most Recently Updated'),
-    'created' =>    __('Most Recently Created'),
-    'due' =>        __('Due Soon'),
-    'priority,due' => __('Priority + Due Soon'),
-    'number' =>     __('Ticket Number'),
-) as $mode => $desc) { ?>
-            <option value="<?php echo $mode; ?>" <?php if ($mode == $_SESSION[$queue_sort_key]) echo 'selected="selected"'; ?>><?php echo $desc; ?></option>
-<?php } ?>
-            </select>
-            </span>
+<div style="margin-bottom:20px; padding-top:5px;">
+    <div class="sticky bar opaque">
+        <div class="content">
+            <div class="pull-left flush-left">
+                <h2><a href="<?php echo $refresh_url; ?>"
+                    title="<?php echo __('Refresh'); ?>"><i class="icon-refresh"></i> <?php echo
+                    $results_type; ?></a></h2>
+            </div>
+            <div class="pull-right flush-right">
             <?php
-            if ($thisstaff->canManageTickets()) {
-                echo TicketStatus::status_options();
-            }
-            if ($thisstaff->hasPerm(TicketModel::PERM_DELETE)) { ?>
-            <a id="tickets-delete" class="action-button tickets-action"
-                href="#tickets/status/delete"><i
-            class="icon-trash"></i> <?php echo __('Delete'); ?></a>
-            <?php
-            } ?>
+            if ($count) {
+                Ticket::agentActions($thisstaff, array('status' => $status));
+            }?>
+            </div>
         </div>
+    </div>
 </div>
-<div class="clear" style="margin-bottom:10px;"></div>
+<div class="clear"></div>
 <form action="tickets.php" method="POST" name='tickets' id="tickets">
 <?php csrf_token(); ?>
  <input type="hidden" name="a" value="mass_process" >
@@ -227,23 +390,23 @@ $_SESSION[':Q:tickets'] = $tickets;
     <thead>
         <tr>
             <?php if ($thisstaff->canManageTickets()) { ?>
-	        <th width="8px">&nbsp;</th>
+	        <th width="2%">&nbsp;</th>
             <?php } ?>
-	        <th width="70">
+	        <th width="7.4%">
                 <?php echo __('Ticket'); ?></th>
-	        <th width="70">
-                <?php echo $date_header ?: __('Date'); ?></th>
-	        <th width="280">
+	        <th width="14.6%">
+                <?php echo $date_header ?: __('Date Created'); ?></th>
+	        <th width="29.8%">
                 <?php echo __('Subject'); ?></th>
-            <th width="170">
+            <th width="18.1%">
                 <?php echo __('From');?></th>
             <?php
             if($search && !$status) { ?>
-                <th width="60">
+                <th width="8.4%">
                     <?php echo __('Status');?></th>
             <?php
             } else { ?>
-                <th width="60" <?php echo $pri_sort;?>>
+                <th width="8.4%" <?php echo $pri_sort;?>>
                     <?php echo __('Priority');?></th>
             <?php
             }
@@ -251,16 +414,16 @@ $_SESSION[':Q:tickets'] = $tickets;
             if($showassigned ) {
                 //Closed by
                 if(!strcasecmp($status,'closed')) { ?>
-                    <th width="150">
+                    <th width="16%">
                         <?php echo __('Closed By'); ?></th>
                 <?php
                 } else { //assigned to ?>
-                    <th width="150">
+                    <th width="16%">
                         <?php echo __('Assigned To'); ?></th>
                 <?php
                 }
             } else { ?>
-                <th width="150">
+                <th width="16%">
                     <?php echo __('Department');?></th>
             <?php
             } ?>
@@ -269,11 +432,10 @@ $_SESSION[':Q:tickets'] = $tickets;
      <tbody>
         <?php
         // Setup Subject field for display
-        $subject_field = TicketForm::objects()->one()->getField('subject');
+        $subject_field = TicketForm::getInstance()->getField('subject');
         $class = "row1";
         $total=0;
         $ids=($errors && $_POST['tids'] && is_array($_POST['tids']))?$_POST['tids']:null;
-        $subject_field = TicketForm::objects()->one()->getField('subject');
         foreach ($tickets as $T) {
             $total += 1;
                 $tag=$T['staff_id']?'assigned':'openticket';
@@ -284,20 +446,17 @@ $_SESSION[':Q:tickets'] = $tickets;
                     $flag='overdue';
 
                 $lc='';
-                $dept = Dept::getLocalById($T['dept_id'], 'name', $T['dept__name']);
-                if($showassigned) {
-                    if($T['staff_id'])
-                        $lc=sprintf('<span class="Icon staffAssigned">%s</span>',Format::truncate((string) new PersonsName($T['staff__firstname'], $T['staff__lastname']),40));
-                    elseif($T['team_id'])
-                        $lc=sprintf('<span class="Icon teamAssigned">%s</span>',
-                            Format::truncate(Team::getLocalById($T['team_id'], 'name', $T['team__name']),40));
-                    else
-                        $lc=' ';
-                }else{
-                    $lc=Format::truncate($dept,40);
+                if ($showassigned) {
+                    if ($T['staff_id'])
+                        $lc = new AgentsName($T['staff__firstname'].' '.$T['staff__lastname']);
+                    elseif ($T['team_id'])
+                        $lc = Team::getLocalById($T['team_id'], 'name', $T['team__name']);
+                }
+                else {
+                    $lc = Dept::getLocalById($T['dept_id'], 'name', $T['dept__name']);
                 }
                 $tid=$T['number'];
-                $subject = Format::truncate($subject_field->display($subject_field->to_php($T['cdata__subject'])),40);
+                $subject = $subject_field->display($subject_field->to_php($T['cdata__subject']));
                 $threadcount=$T['thread_count'];
                 if(!strcasecmp($T['status__state'],'open') && !$T['isanswered'] && !$T['lock__staff_id']) {
                     $tid=sprintf('<b>%s</b>',$tid);
@@ -321,21 +480,37 @@ $_SESSION[':Q:tickets'] = $tickets;
                     href="tickets.php?id=<?php echo $T['ticket_id']; ?>"
                     data-preview="#tickets/<?php echo $T['ticket_id']; ?>/preview"
                     ><?php echo $tid; ?></a></td>
-                <td align="center" nowrap><?php echo Format::datetime($T[$date_col ?: 'lastupdate']); ?></td>
-                <td><a <?php if ($flag) { ?> class="Icon <?php echo $flag; ?>Ticket" title="<?php echo ucfirst($flag); ?> Ticket" <?php } ?>
-                    href="tickets.php?id=<?php echo $T['ticket_id']; ?>"><?php echo $subject; ?></a>
-                     <?php
-                        if ($threadcount>1)
-                            echo "<small>($threadcount)</small>&nbsp;".'<i
-                                class="icon-fixed-width icon-comments-alt"></i>&nbsp;';
-                        if ($T['collab_count'])
-                            echo '<i class="icon-fixed-width icon-group faded"></i>&nbsp;';
-                        if ($T['attachment_count'])
-                            echo '<i class="icon-fixed-width icon-paperclip"></i>&nbsp;';
-                    ?>
+                <td align="center" nowrap><?php echo Format::datetime($T[$date_col ?: 'lastupdate']) ?: $date_fallback; ?></td>
+                <td><div style="max-width: <?php
+                    $base = 280;
+                    // Make room for the paperclip and some extra
+                    if ($T['attachment_count']) $base -= 18;
+                    // Assume about 8px per digit character
+                    if ($threadcount > 1) $base -= 20 + ((int) log($threadcount, 10) + 1) * 8;
+                    // Make room for overdue flag and friends
+                    if ($flag) $base -= 20;
+                    echo $base; ?>px; max-height: 1.2em"
+                    class="<?php if ($flag) { ?>Icon <?php echo $flag; ?>Ticket <?php } ?>link truncate"
+                    <?php if ($flag) { ?> title="<?php echo ucfirst($flag); ?> Ticket" <?php } ?>
+                    href="tickets.php?id=<?php echo $T['ticket_id']; ?>"><?php echo $subject; ?></div>
+<?php               if ($T['attachment_count'])
+                        echo '<i class="small icon-paperclip icon-flip-horizontal" data-toggle="tooltip" title="'
+                            .$T['attachment_count'].'"></i>';
+                    if ($threadcount > 1) { ?>
+                        <span class="pull-right faded-more"><i class="icon-comments-alt"></i>
+                            <small><?php echo $threadcount; ?></small>
+                        </span>
+                    <?php } ?>
                 </td>
-                <td nowrap>&nbsp;<?php $un = new PersonsName($T['user__name']); echo Format::htmlchars(
-                        Format::truncate($un, 22, strpos($un, '@'))); ?>&nbsp;</td>
+                <td nowrap><div><?php
+                    if ($T['collab_count'])
+                        echo '<span class="pull-right faded-more" data-toggle="tooltip" title="'
+                            .$T['collab_count'].'"><i class="icon-group"></i></span>';
+                    ?><span class="truncate" style="max-width:<?php
+                        echo $T['collab_count'] ? '150px' : '170px'; ?>"><?php
+                    $un = new UsersName($T['user__name']);
+                        echo Format::htmlchars($un);
+                    ?></span></div></td>
                 <?php
                 if($search && !$status){
                     $displaystatus=TicketStatus::getLocalById($T['status_id'], 'value', $T['status__name']);
@@ -343,12 +518,13 @@ $_SESSION[':Q:tickets'] = $tickets;
                         $displaystatus="<b>$displaystatus</b>";
                     echo "<td>$displaystatus</td>";
                 } else { ?>
-                <td class="nohover" align="center" style="background-color:<?php echo $T['cdata__:priority__priority_color']; ?>;">
-                    <?php echo $T['cdata__:priority__priority_desc']; ?></td>
+                <td class="nohover" align="center" style="background-color:<?php echo $T['cdata__priority__priority_color']; ?>;">
+                    <?php echo $T['cdata__priority__priority_desc']; ?></td>
                 <?php
                 }
                 ?>
-                <td nowrap>&nbsp;<?php echo $lc; ?></td>
+                <td nowrap><span class="truncate" style="max-width: 169px"><?php
+                    echo Format::htmlchars($lc); ?></span></td>
             </tr>
             <?php
             } //end of foreach
@@ -375,7 +551,10 @@ $_SESSION[':Q:tickets'] = $tickets;
     </table>
     <?php
     if ($total>0) { //if we actually had any tickets returned.
-        echo '<div>&nbsp;'.__('Page').':'.$pageNav->getPageLinks().'&nbsp;';
+?>      <div>
+            <span class="faded pull-right"><?php echo $pageNav->showing(); ?></span>
+<?php
+        echo __('Page').':'.$pageNav->getPageLinks().'&nbsp;';
         echo sprintf('<a class="export-csv no-pjax" href="?%s">%s</a>',
                 Http::build_query(array(
                         'a' => 'export', 'h' => $hash,
@@ -391,7 +570,7 @@ $_SESSION[':Q:tickets'] = $tickets;
     <a class="close" href=""><i class="icon-remove-circle"></i></a>
     <hr/>
     <p class="confirm-action" style="display:none;" id="mark_overdue-confirm">
-        <?php echo __('Are you sure want to flag the selected tickets as <font color="red"><b>overdue</b></font>?');?>
+        <?php echo __('Are you sure you want to flag the selected tickets as <font color="red"><b>overdue</b></font>?');?>
     </p>
     <div><?php echo __('Please confirm to continue.');?></div>
     <hr style="margin-top:1em"/>
@@ -407,21 +586,7 @@ $_SESSION[':Q:tickets'] = $tickets;
 </div>
 <script type="text/javascript">
 $(function() {
-    $(document).off('.tickets');
-    $(document).on('click.tickets', 'a.tickets-action', function(e) {
-        e.preventDefault();
-        var count = checkbox_checker($('form#tickets'), 1);
-        if (count) {
-            var url = 'ajax.php/'
-            +$(this).attr('href').substr(1)
-            +'?count='+count
-            +'&_uid='+new Date().getTime();
-            $.dialog(url, [201], function (xhr) {
-                window.location.href = window.location.href;
-             });
-        }
-        return false;
-    });
+    $('[data-toggle=tooltip]').tooltip();
 });
 </script>
 

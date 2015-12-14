@@ -21,25 +21,41 @@ class Draft extends VerySimpleModel {
     static $meta = array(
         'table' => DRAFT_TABLE,
         'pk' => array('id'),
+        'joins' => array(
+            'attachments' => array(
+                'constraint' => array(
+                    "'D'" => 'Attachment.type',
+                    'id' => 'Attachment.object_id',
+                ),
+                'list' => true,
+                'null' => true,
+                'broker' => 'GenericAttachments',
+            ),
+        ),
     );
-
-    var $attachments;
-
-    function __construct() {
-        call_user_func_array(array('parent', '__construct'), func_get_args());
-        if (isset($this->id))
-            $this->attachments = new GenericAttachments($this->id, 'D');
-    }
 
     function getId() { return $this->id; }
     function getBody() { return $this->body; }
     function getStaffId() { return $this->staff_id; }
     function getNamespace() { return $this->namespace; }
 
+    static protected function getCurrentUserId() {
+        global $thisstaff, $thisclient;
+        
+        $user = $thisstaff ?: $thisclient;
+        if ($user)
+            return $user->getId();
+
+        return 1 << 31;
+    }
+
     static function getDraftAndDataAttrs($namespace, $id=0, $original='') {
         $draft_body = null;
         $attrs = array(sprintf('data-draft-namespace="%s"', Format::htmlchars($namespace)));
-        $criteria = array('namespace'=>$namespace);
+        $criteria = array(
+            'namespace' => $namespace,
+            'staff_id' => self::getCurrentUserId(),
+        );
         if ($id) {
             $attrs[] = sprintf('data-draft-object-id="%s"', Format::htmlchars($id));
             $criteria['namespace'] .= '.' . $id;
@@ -124,11 +140,12 @@ class Draft extends VerySimpleModel {
         return parent::save($refetch);
     }
 
-    static function create($vars) {
+    static function create($vars=false) {
         $attachments = @$vars['attachments'];
         unset($vars['attachments']);
 
         $vars['created'] = SqlFunction::NOW();
+        $vars['staff_id'] = self::getCurrentUserId();
         $draft = parent::create($vars);
 
         // Cloned attachments ...
@@ -153,14 +170,12 @@ class Draft extends VerySimpleModel {
      * are cleaned up.
      */
     static function deleteForNamespace($namespace, $staff_id=false) {
-        $sql = 'DELETE attach FROM '.ATTACHMENT_TABLE.' attach
-                INNER JOIN '.DRAFT_TABLE.' draft
-                ON (attach.object_id = draft.id AND attach.`type`=\'D\')
-                WHERE draft.`namespace` LIKE '.db_input($namespace);
+        $attachments = Attachment::objects()
+            ->filter(array('draft__namespace__startswith' => $namespace));
         if ($staff_id)
-            $sql .= ' AND draft.staff_id='.db_input($staff_id);
-        if (!db_query($sql))
-            return false;
+            $attachments->filter(array('draft__staff_id' => $staff_id));
+
+        $attachments->delete();
 
         $criteria = array('namespace__like'=>$namespace);
         if ($staff_id)
@@ -169,11 +184,10 @@ class Draft extends VerySimpleModel {
     }
 
     static function cleanup() {
-        // Keep client drafts for two weeks (14 days)
+        // Keep drafts for two weeks (14 days)
         $sql = 'DELETE FROM '.DRAFT_TABLE
-            ." WHERE `namespace` LIKE 'ticket.client.%'
-            AND ((updated IS NULL AND datediff(now(), created) > 14)
-                OR datediff(now(), updated) > 14)";
+            ." WHERE (updated IS NULL AND datediff(now(), created) > 14)
+                OR datediff(now(), updated) > 14";
         return db_query($sql);
     }
 }

@@ -36,8 +36,9 @@ if($_POST){
             }
             break;
         case 'create':
-            $topic = Topic::create();
-            if ($topic->update($_POST, $errors)) {
+            $_topic = Topic::create();
+            if ($_topic->update($_POST, $errors)) {
+                $topic = $_topic;
                 $msg=sprintf(__('Successfully added %s'), Format::htmlchars($_POST['topic']));
                 $_REQUEST['a']=null;
             }elseif(!$errors['err']){
@@ -88,7 +89,7 @@ if($_POST){
                         ));
                         if ($num > 0) {
                             if($num==$count)
-                                $msg = sprintf(__('Successfully diabled %s'),
+                                $msg = sprintf(__('Successfully disabled %s'),
                                     _N('selected help topic', 'selected help topics', $count));
                             else
                                 $warn = sprintf(__('%1$d of %2$d %3$s disabled'), $num, $count,
@@ -105,7 +106,7 @@ if($_POST){
 
                         if($i && $i==$count)
                             $msg = sprintf(__('Successfully deleted %s'),
-                                _N('selected help topic', 'selected elp topics', $count));
+                                _N('selected help topic', 'selected help topics', $count));
                         elseif($i>0)
                             $warn = sprintf(__('%1$d of %2$d %3$s deleted'), $i, $count,
                                 _N('selected help topic', 'selected help topics', $count));

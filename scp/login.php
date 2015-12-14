@@ -67,8 +67,11 @@ elseif ($_GET['do']) {
 elseif (!$thisstaff || !($thisstaff->getId() || $thisstaff->isValid())) {
     if (($user = StaffAuthenticationBackend::processSignOn($errors, false))
             && ($user instanceof StaffSession))
-       @header("Location: $dest");
+       Http::redirect($dest);
 }
+
+// Browsers shouldn't suggest saving that username/password
+Http::response(422);
 
 define("OSTSCPINC",TRUE); //Make includes happy!
 include_once(INCLUDE_DIR.'staff/login.tpl.php');

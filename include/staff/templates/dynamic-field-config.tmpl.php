@@ -1,4 +1,4 @@
-    <h3><?php echo __('Field Configuration'); ?> &mdash; <?php echo $field->get('label') ?></h3>
+    <h3 class="drag-handle"><?php echo __('Field Configuration'); ?> &mdash; <?php echo $field->get('label') ?></h3>
     <a class="close" href=""><i class="icon-remove-circle"></i></a>
     <hr/>
     <form method="post" action="#form/field-config/<?php
@@ -95,21 +95,22 @@
         ?>> <?php echo __('For Agents'); ?><br/>
     </div>
 
-<?php if (in_array($field->get('form')->get('type'), array('G', 'T'))) { ?>
+<?php if (in_array($field->get('form')->get('type'), array('G', 'T', 'A'))) { ?>
     <hr class="faded"/>
 
     <div class="span4">
-        <div style="margin-bottom:5px"><strong>Data Integrity</strong>
+        <div style="margin-bottom:5px"><strong><?php __('Data Integrity');
+    ?></strong>
         <i class="help-tip icon-question-sign"
-            data-title="<?php echo __('Required to close a ticket'); ?>"
-            data-content="<?php echo __('Optionally, this field can prevent closing a ticket until it has valid data.'); ?>"></i>
+            data-title="<?php echo __('Required to close a thread'); ?>"
+            data-content="<?php echo __('Optionally, this field can prevent closing a thread until it has valid data.'); ?>"></i>
         </div>
     </div>
     <div class="span6">
         <input type="checkbox" name="flags[]" value="<?php
             echo DynamicFormField::FLAG_CLOSE_REQUIRED; ?>" <?php
             if ($field->hasFlag(DynamicFormField::FLAG_CLOSE_REQUIRED)) echo 'checked="checked"';
-        ?>> <?php echo __('Required to close a ticket'); ?><br/>
+        ?>> <?php echo __('Require entry to close a thread'); ?><br/>
     </div>
 <?php } ?>
 <?php } ?>
@@ -134,7 +135,7 @@
             <?php
             if ($f->get('hint')) { ?>
                 <br/><em style="color:gray;display:inline-block"><?php
-                    echo Format::htmlchars($f->get('hint')); ?></em>
+                    echo Format::viewableImages($f->get('hint')); ?></em>
             <?php
             } ?>
             </div><div>
@@ -160,6 +161,7 @@
         </div>
         <div style="width:100%">
         <textarea style="width:90%; width:calc(100% - 20px)" name="hint" rows="2" cols="40"
+            class="richtext small no-bar"
             data-translate-tag="<?php echo $field->getTranslateTag('hint'); ?>"><?php
             echo Format::htmlchars($field->get('hint')); ?></textarea>
         </div>
@@ -180,7 +182,7 @@
 
 <script type="text/javascript">
    // Make translatable fields translatable
-   $('input[data-translate-tag], textarea[data-translate-tag]').translatable();
+   $('input[data-translate-tag]').translatable();
 </script>
 
 <style type="text/css">
@@ -208,7 +210,7 @@
     display: inline-block;
     vertical-align: top;
 }
-.dialog input, .dialog select {
+.dialog input[type=text], .dialog select {
     margin: 2px;
 }
 hr.faded {
